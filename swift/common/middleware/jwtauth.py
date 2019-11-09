@@ -53,20 +53,26 @@ class JWTAuth(object):
         self.logger = get_logger(conf, log_route='jwt-auth')
 
     def __call__(self, env, start_response):
-        token = env['HTTP_X_AUTH_TOKEN']
-        try:
-            with open(self.conf['public_key'], 'rb') as pubkeyfile:
-                pubkey = pubkeyfile.read()
-                pubkeyfile.close()
-                payload = jwt.decode(token, pubkey, algorithms='RS256')
-                env['REMOTE_USER'] = payload['email'] + ',' + payload['swift_groups']
-                env['swift.authorize'] = self.authorize
-                env['swift.clean_acl'] = clean_acl
+        token = env.get('HTTP_X_AUTH_TOKEN')
+        if token:
+            try:
+                with open(self.conf['public_key'], 'rb') as pubkeyfile:
+                    pubkey = pubkeyfile.read()
+                    pubkeyfile.close()
+                    payload = jwt.decode(token, pubkey, algorithms='RS256')
+                    env['REMOTE_USER'] = payload['email'] + ', ' + payload['swift_groups']
+                    env['swift.authorize'] = self.authorize
+                    env['swift.clean_acl'] = clean_acl
 
-                if '.reseller_admin' in payload['groups']:
-                    env['reseller_request'] = True
-        except jwt.JWTError:
-            env['swift.authorize'] = self.denied_response
+                    if '.reseller_admin' in payload['groups']:
+                        env['reseller_request'] = True
+            except jwt.JWTError:
+                env['swift.authorize'] = self.denied_response
+        else:
+            # Not my token, not my account, I can't authorize this request,
+            # deny all is a good idea if not already set...
+            if 'swift.authorize' not in env:
+                env['swift.authorize'] = self.denied_response
 
         return self.app(env, start_response)
 
