@@ -1,4 +1,4 @@
-import jwt
+from jose import jwt
 import json
 import six
 from swift.common.swob import wsgi_to_str
@@ -65,7 +65,7 @@ class JWTAuth(object):
 
                 if '.reseller_admin' in payload['groups']:
                     env['reseller_request'] = True
-        except jwt.exceptions.InvalidTokenError:
+        except jwt.JWTError:
             env['swift.authorize'] = self.denied_response
 
         return self.app(env, start_response)
