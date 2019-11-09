@@ -64,7 +64,7 @@ class JWTAuth(object):
                     env['swift.authorize'] = self.authorize
                     env['swift.clean_acl'] = clean_acl
 
-                    if '.reseller_admin' in payload['groups']:
+                    if '.reseller_admin' in payload['swift_groups']:
                         env['reseller_request'] = True
             except jwt.JWTError:
                 env['swift.authorize'] = self.denied_response
