@@ -56,9 +56,10 @@ class JWTAuth(object):
         token = env.get('HTTP_X_AUTH_TOKEN')
         if token:
             try:
-                with open(self.conf['public_key'], 'rb') as pubkeyfile:
+                with open(self.conf.get('public_key', ''), 'rb') as pubkeyfile:
                     pubkey = pubkeyfile.read()
                     pubkeyfile.close()
+                    self.logger.debug('JWT public key read')
                     payload = jwt.decode(token, pubkey, algorithms='RS256')
                     env['REMOTE_USER'] = payload['email'] + ', ' + payload['swift_groups']
                     env['swift.authorize'] = self.authorize
@@ -66,7 +67,7 @@ class JWTAuth(object):
 
                     if '.reseller_admin' in payload['swift_groups']:
                         env['reseller_request'] = True
-                    self.logger.debug('User % authenticated', payload['email'])
+                    self.logger.debug('User %s authenticated' % payload['email'])
             except jwt.JWTError:
                 env['swift.authorize'] = self.denied_response
         else:
