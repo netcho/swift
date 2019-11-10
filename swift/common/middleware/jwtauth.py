@@ -66,6 +66,7 @@ class JWTAuth(object):
 
                     if '.reseller_admin' in payload['swift_groups']:
                         env['reseller_request'] = True
+                    self.logger.debug('User % authenticated', payload['email'])
             except jwt.JWTError:
                 env['swift.authorize'] = self.denied_response
         else:
