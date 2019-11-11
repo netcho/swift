@@ -8,7 +8,7 @@ from swift.common.request_helpers import get_sys_meta_prefix
 from swift.proxy.controllers.base import get_account_info
 from swift.common.middleware.acl import (
     clean_acl, parse_acl, referrer_allowed, acls_from_account_info)
-from swift.common.utils import get_logger, register_swift_info
+from swift.common.utils import get_logger, register_swift_info, split_path
 
 
 def extract_acl_and_report_errors(req):
@@ -46,6 +46,29 @@ def extract_acl_and_report_errors(req):
     return None
 
 
+def get_user_groups(current_account, accounts, user, user_groups):
+    """
+        :param current_account: The account for this request
+        :param accounts: All accounts this user has access to
+        :param user: The username of the user
+        :param user_groups All the groups this user is part of
+        :return: a comma separated string of group names. The group names are
+                 as follows: account,account_user,groups...
+                 If .admin is in the groups, this is replaced by all the
+                 possible account ids. For example, for user joe, account acct
+                 and resellers AUTH_, OTHER_, the returned string is as
+                 follows: acct,acct:joe,AUTH_acct,OTHER_acct
+        """
+    groups = [current_account, user]
+    groups.extend(user_groups)
+    if '.admin' in groups:
+        groups.remove('.admin')
+        for account in accounts:
+            groups.append(account)
+    groups = ','.join(groups)
+    return groups
+
+
 class JWTAuth(object):
     def __init__(self, app, conf):
         self.app = app
@@ -56,18 +79,26 @@ class JWTAuth(object):
         token = env.get('HTTP_X_AUTH_TOKEN')
         if token:
             try:
+                pathsegs = split_path(env.get('PATH_INFO'), 1, 3, True)
+            except ValueError:
+                self.logger.increment('errors')
+                env['swift.authorize'] = self.denied_response
+                return self.app(env, start_response)
+            try:
                 with open(self.conf.get('public_key', ''), 'rb') as pubkeyfile:
                     pubkey = pubkeyfile.read()
                     pubkeyfile.close()
-                    self.logger.debug('JWT public key read')
                     payload = jwt.decode(token, pubkey, algorithms='RS256')
-                    env['REMOTE_USER'] = payload['email'] + ', ' + payload['swift_groups']
-                    env['swift.authorize'] = self.authorize
-                    env['swift.clean_acl'] = clean_acl
+                    if pathsegs[0] == 'v1' and pathsegs[1] in payload['swift_accounts']:
+                        env['REMOTE_USER'] = get_user_groups(pathsegs[1], payload['swift_accounts'], payload['email'],
+                                                             payload['swift_groups'])
+                        env['swift.authorize'] = self.authorize
+                        env['swift.clean_acl'] = clean_acl
 
-                    if '.reseller_admin' in payload['swift_groups']:
-                        env['reseller_request'] = True
-                    self.logger.debug('User %s authenticated' % payload['email'])
+                        if '.reseller_admin' in payload['swift_groups']:
+                            env['reseller_request'] = True
+                        self.logger.debug('User %s authenticated' % payload['email'])
+
             except jwt.JWTError:
                 env['swift.authorize'] = self.denied_response
         else:
@@ -131,22 +162,22 @@ class JWTAuth(object):
                 return HTTPBadRequest(request=req, headers=headers, body=msg)
 
         user_groups = (req.remote_user or '').split(',')
-        account_user = user_groups[1] if len(user_groups) > 1 else None
+        user = user_groups[1] if len(user_groups) > 1 else None
 
         if '.reseller_admin' in user_groups:
             req.environ['swift_owner'] = True
             self.logger.debug("User %s has reseller admin authorizing."
-                              % account_user)
+                              % user)
             return None
 
         if wsgi_to_str(account) in user_groups and \
                 (req.method not in ('DELETE', 'PUT') or container):
             # The user is admin for the account and is not trying to do an
             # account DELETE or PUT
-                req.environ['swift_owner'] = True
-                self.logger.debug("User %s has admin authorizing."
-                                  % account_user)
-                return None
+            req.environ['swift_owner'] = True
+            self.logger.debug("User %s has admin authorizing."
+                              % user)
+            return None
 
         if (req.environ.get('swift_sync_key')
                 and (req.environ['swift_sync_key'] ==
@@ -172,7 +203,7 @@ class JWTAuth(object):
         for user_group in user_groups:
             if user_group in groups:
                 self.logger.debug("User %s allowed in ACL: %s authorizing."
-                                  % (account_user, user_group))
+                                  % (user, user_group))
                 return None
 
         # Check for access via X-Account-Access-Control
@@ -184,19 +215,19 @@ class JWTAuth(object):
             if user_group_set.intersection(acct_acls['admin']):
                 req.environ['swift_owner'] = True
                 self.logger.debug('User %s allowed by X-Account-Access-Control'
-                                  ' (admin)' % account_user)
+                                  ' (admin)' % user)
                 return None
             if (user_group_set.intersection(acct_acls['read-write']) and
                     (container or req.method in ('GET', 'HEAD'))):
                 # The RW ACL allows all operations to containers/objects, but
                 # only GET/HEAD to accounts (and OPTIONS, above)
                 self.logger.debug('User %s allowed by X-Account-Access-Control'
-                                  ' (read-write)' % account_user)
+                                  ' (read-write)' % user)
                 return None
             if (user_group_set.intersection(acct_acls['read-only']) and
                     req.method in ('GET', 'HEAD')):
                 self.logger.debug('User %s allowed by X-Account-Access-Control'
-                                  ' (read-only)' % account_user)
+                                  ' (read-only)' % user)
                 return None
 
         return self.denied_response(req)
