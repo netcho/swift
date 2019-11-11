@@ -79,7 +79,7 @@ class JWTAuth(object):
         token = env.get('HTTP_X_AUTH_TOKEN')
         if token:
             try:
-                pathsegs = split_path(env.get('PATH_INFO'), 1, 3, True)
+                pathsegs = split_path(env.get('PATH_INFO', ''), 1, 3, True)
             except ValueError:
                 self.logger.increment('errors')
                 env['swift.authorize'] = self.denied_response
@@ -98,6 +98,10 @@ class JWTAuth(object):
                         if '.reseller_admin' in payload['swift_groups']:
                             env['reseller_request'] = True
                         self.logger.debug('User %s authenticated' % payload['email'])
+                    else:
+                        auth = 'Swift realm="%s"' % pathsegs[1]
+                        return HTTPUnauthorized(request=start_response,
+                                                headers={'Www-Authenticate': auth})
 
             except jwt.JWTError:
                 env['swift.authorize'] = self.denied_response
